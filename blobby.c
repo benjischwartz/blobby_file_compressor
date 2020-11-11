@@ -162,10 +162,11 @@ void list_blob(char *blob_pathname) {
         perror("Something went wrong");
     }
 
-    int ch = fgetc(f);
+    int ch = 0;
     while ((ch != EOF)) {
-        if (ch != 42) {
-            perror("Not a blob"); // match this error with reference implementation
+        ch = fgetc(f);
+        if (ch != 'B') {
+            break;
         }
 
         // read mode
@@ -182,7 +183,7 @@ void list_blob(char *blob_pathname) {
             p_length <<= 8;
             ch = fgetc(f);
             p_length |= ch;
-        } 
+        }
 
         // read c length
         unsigned long c_length = 0;
@@ -192,16 +193,16 @@ void list_blob(char *blob_pathname) {
             c_length |= ch;
         }
 
-        unsigned long p_name = 0;
+        char pathname[p_length + 1];
         for (int i = 0; i < p_length; i++){
-            p_name <<= 8;
             ch = fgetc(f);
-            p_name |= ch;      
+            pathname[i] = ch;
         }
+        pathname[p_length] = '\0';
 
-        // convert p_name into a string
-        char pathname[BLOBETTE_MAX_PATHNAME_LENGTH];
-        sprintf(pathname, "%lu", p_name);
+        // // convert p_name into a string
+        // char pathname[BLOBETTE_MAX_PATHNAME_LENGTH];
+        // sprintf(pathname, "%lu", p_name);
 
         for (int i = 0; i < c_length; i++){
             ch = fgetc(f);
@@ -212,17 +213,9 @@ void list_blob(char *blob_pathname) {
 
         // start over
         printf("%06lo %5lu %s\n", mode, c_length, pathname);
-
     }
 
-
-
-
     // file type and permissions returned in st_mode field from lstat(2)
-    
-    // printf("list_blob called to list '%s'\n", blob_pathname);
-
-    // HINT: you'll need a printf like:
 
 }
 
