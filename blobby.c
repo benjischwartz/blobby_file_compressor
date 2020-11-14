@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <errno.h>
 
 // the first byte of every blobette has this value
 #define BLOBETTE_MAGIC_NUMBER          0x42
@@ -42,8 +43,8 @@ void usage(char *myname);
 action_t process_arguments(int argc, char *argv[], char **blob_pathname,
                            char ***pathnames, int *compress_blob);
 
-void list_blob(char *blob_pathname);
-void extract_blob(char *blob_pathname);
+void list_blob(char *blob_pathname, int *hash);
+void extract_blob(char *blob_pathname, int *hash);
 void create_blob(char *blob_pathname, char *pathnames[], int compress_blob);
 
 uint8_t blobby_hash(uint8_t hash, uint8_t byte);
@@ -58,16 +59,21 @@ int main(int argc, char *argv[]) {
     char *blob_pathname = NULL;
     char **pathnames = NULL;
     int compress_blob = 0;
+
+    int i = 0;
+    int *hash;
+    hash = &i;
+
     action_t action = process_arguments(argc, argv, &blob_pathname, &pathnames,
                                         &compress_blob);
 
     switch (action) {
     case a_list:
-        list_blob(blob_pathname);
+        list_blob(blob_pathname, hash);
         break;
 
     case a_extract:
-        extract_blob(blob_pathname);
+        extract_blob(blob_pathname, hash);
         break;
 
     case a_create:
@@ -151,7 +157,7 @@ action_t process_arguments(int argc, char *argv[], char **blob_pathname,
 
 // list the contents of blob_pathname
 
-void list_blob(char *blob_pathname) {
+void list_blob(char *blob_pathname, int *hash) {
     // prints out:
     //      - file/directory permissions in octal
     //      - file/directory size in bytes
@@ -165,6 +171,7 @@ void list_blob(char *blob_pathname) {
     int ch = 0;
     while ((ch != EOF)) {
         ch = fgetc(f);
+        *hash = blobby_hash(00, ch);
         if (ch != 'B') {
             break;
         }
@@ -175,6 +182,7 @@ void list_blob(char *blob_pathname) {
             mode <<= 8;
             ch = fgetc(f);
             mode |= ch;
+            *hash = blobby_hash(*hash, ch);
         }
 
         // read p length
@@ -183,6 +191,7 @@ void list_blob(char *blob_pathname) {
             p_length <<= 8;
             ch = fgetc(f);
             p_length |= ch;
+            *hash = blobby_hash(*hash, ch);
         }
 
         // read c length
@@ -191,21 +200,20 @@ void list_blob(char *blob_pathname) {
             c_length <<= 8;
             ch = fgetc(f);
             c_length |= ch;
+            *hash = blobby_hash(*hash, ch);
         }
 
         char pathname[p_length + 1];
         for (int i = 0; i < p_length; i++){
             ch = fgetc(f);
             pathname[i] = ch;
+            *hash = blobby_hash(*hash, ch);
         }
         pathname[p_length] = '\0';
 
-        // // convert p_name into a string
-        // char pathname[BLOBETTE_MAX_PATHNAME_LENGTH];
-        // sprintf(pathname, "%lu", p_name);
-
         for (int i = 0; i < c_length; i++){
             ch = fgetc(f);
+            *hash = blobby_hash(*hash, ch);
         }
 
         // read hash
@@ -222,11 +230,75 @@ void list_blob(char *blob_pathname) {
 
 // extract the contents of blob_pathname
 
-void extract_blob(char *blob_pathname) {
+void extract_blob(char *blob_pathname, int *hash) {
+    FILE* f = fopen(blob_pathname, "r"); // read a file with the given name
+    if (f == NULL) {
+        perror("Something went wrong");
+    }
 
-    // REPLACE WITH YOUR CODE FOR -x
+    int hash_correct = 1;
+    int ch = 0;
+    while ((ch != EOF)) {
+        ch = fgetc(f);
+        *hash = blobby_hash(00, ch);
+        if (ch != 'B') {
+            break;
+        }
 
-    printf("extract_blob called to extract '%s'\n", blob_pathname);
+        // read mode
+        unsigned long mode = 0;
+        for (int i = 0; i < 3; i++) {
+            mode <<= 8;
+            ch = fgetc(f);
+            mode |= ch;
+            *hash = blobby_hash(*hash, ch);
+        }
+
+        // read p length
+        unsigned long p_length = 0;
+        for (int i = 0; i < 2; i++) {
+            p_length <<= 8;
+            ch = fgetc(f);
+            p_length |= ch;
+            *hash = blobby_hash(*hash, ch);
+        }
+
+        // read c length
+        unsigned long c_length = 0;
+        for (int i = 0; i < 6; i++) {
+            c_length <<= 8;
+            ch = fgetc(f);
+            c_length |= ch;
+            *hash = blobby_hash(*hash, ch);
+        }
+
+        char pathname[p_length + 1];
+        for (int i = 0; i < p_length; i++){
+            ch = fgetc(f);
+            pathname[i] = ch;
+            *hash = blobby_hash(*hash, ch);
+        }
+        pathname[p_length] = '\0';
+
+        printf("Extracting: %s\n", pathname);
+
+        FILE* new_f = fopen(pathname, "w");
+        for (int i = 0; i < c_length; i++){
+            ch = fgetc(f);
+            fputc(ch, new_f);
+        }
+
+        // read hash
+        ch = fgetc(f);
+        if (*hash != ch) {
+            hash_correct = -1;
+        }
+    }
+    if (hash_correct != 1) {
+        printf("ERROR: blob hash incorrect\n");
+    }
+
+    // TODO: set permissions
 }
 
 // create blob_pathname from NULL-terminated array pathnames
