@@ -169,10 +169,10 @@ void list_blob(char *blob_pathname, int *hash) {
     }
 
     int ch = 0;
-    while ((ch != EOF)) {
-        ch = fgetc(f);
+    while ((ch = fgetc(f))!= EOF) {
         *hash = blobby_hash(00, ch);
         if (ch != 'B') {
+            fprintf(stderr, "ERROR: Magic byte of blobette incorrect\n");
             break;
         }
 
@@ -238,10 +238,10 @@ void extract_blob(char *blob_pathname, int *hash) {
 
     int hash_correct = 1;
     int ch = 0;
-    while ((ch != EOF)) {
-        ch = fgetc(f);
+    while ((ch = fgetc(f))!= EOF) {
         *hash = blobby_hash(00, ch);
         if (ch != 'B') {
+            fprintf(stderr, "ERROR: Magic byte of blobette incorrect\n");
             break;
         }
 
@@ -283,9 +283,17 @@ void extract_blob(char *blob_pathname, int *hash) {
         printf("Extracting: %s\n", pathname);
 
         FILE* new_f = fopen(pathname, "w");
+
+        // set mode of new file with chmod()
+        if (chmod(pathname, mode) != 0) {
+            perror("unable to update mode of file");
+        }
+        
+        // write contents of new file
         for (int i = 0; i < c_length; i++){
             ch = fgetc(f);
             fputc(ch, new_f);
+            *hash = blobby_hash(*hash, ch);
         }
 
         // read hash
@@ -295,10 +303,8 @@ void extract_blob(char *blob_pathname, int *hash) {
         }
     }
     if (hash_correct != 1) {
-        printf("ERROR: blob hash incorrect\n");
+        fprintf(stderr, "ERROR: blob hash incorrect\n");
     }
-
-    // TODO: set permissions
 }
 
 // create blob_pathname from NULL-terminated array pathnames
@@ -311,10 +317,54 @@ void create_blob(char *blob_pathname, char *pathnames[], int compress_blob) {
     printf("create_blob called to create %s blob '%s' containing:\n",
            compress_blob ? "compressed" : "non-compressed", blob_pathname);
 
+    FILE* new_blob = fopen(blob_pathname, "w"); // create blob
     for (int p = 0; pathnames[p]; p++) {
-        printf("%s\n", pathnames[p]);
-    }
+        // create a blob from pathnames[p]
+        // FILE* pathname = fopen(pathnames[p], "r");   // read pathname
+        fputc('B', new_blob);
 
+        struct stat buf;
+        if (stat(pathnames[p], &buf) != 0) {
+            fprintf(stderr, "Failed to load stat from file");
+            exit(EXIT_FAILURE);
+        }
+
+        // extract mode from pathname[p] and use bit-shift to store in blob
+        // concatenate to fit field length of 3 bytes
+        mode_t mode = buf.st_mode;
+        for (int i = 0; i < 3; i++) {
+            uint32_t mask = 0xFF;
+            mask <<= 8*(2 - i);
+            mask &= mode;
+            mask >>= 8*(2 - i);
+            fputc(mask, new_blob);
+        }
+
+        // store pathname length - concatenate to fit field length of 2 bytes
+        uint pathname_length = strlen(pathnames[p]);
+        for (int i = 0; i < 2; i++) {
+            uint32_t mask = 0xFF;
+            mask <<= 8*(1 - i);
+            mask &= pathname_length;
+            mask >>= 8*(1 - i);
+            fputc(mask, new_blob);
+        }
+
+        // store content length - concatenate to fit field length of 6 bytes
+        off_t content_length = buf.st_size;
+        for (int i = 0; i < 6; i++) {
+            uint64_t mask = 0xFF;
+            mask <<= 8*(5 - i);
+            mask &= content_length;
+            mask >>= 8*(5 - i);
+            fputc(mask, new_blob);
+        }
+
+        // store pathname - concatenate to fit field length of pathname_length bytes
+        for (int i = 0; i < pathname_length; i++) {
+            fputc(pathnames[p][i], new_blob);
+        }
+    }
 }
 
 
