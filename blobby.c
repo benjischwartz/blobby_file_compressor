@@ -171,7 +171,7 @@ void list_blob(char *blob_pathname, int *hash) {
     int ch = 0;
     while ((ch = fgetc(f))!= EOF) {
         *hash = blobby_hash(00, ch);
-        if (ch != 'B') {
+        if (ch != BLOBETTE_MAGIC_NUMBER) {
             fprintf(stderr, "ERROR: Magic byte of blobette incorrect\n");
             break;
         }
@@ -240,7 +240,7 @@ void extract_blob(char *blob_pathname, int *hash) {
     int ch = 0;
     while ((ch = fgetc(f))!= EOF) {
         *hash = blobby_hash(00, ch);
-        if (ch != 'B') {
+        if (ch != BLOBETTE_MAGIC_NUMBER) {
             fprintf(stderr, "ERROR: Magic byte of blobette incorrect\n");
             break;
         }
@@ -312,16 +312,18 @@ void extract_blob(char *blob_pathname, int *hash) {
 
 void create_blob(char *blob_pathname, char *pathnames[], int compress_blob) {
 
-    // REPLACE WITH YOUR CODE FOR -c
-
-    printf("create_blob called to create %s blob '%s' containing:\n",
-           compress_blob ? "compressed" : "non-compressed", blob_pathname);
+    // printf("create_blob called to create %s blob '%s' containing:\n",
+    //        compress_blob ? "compressed" : "non-compressed", blob_pathname);
 
     FILE* new_blob = fopen(blob_pathname, "w"); // create blob
     for (int p = 0; pathnames[p]; p++) {
+        int hash = 0;
+
+        printf("Adding: %s\n", pathnames[p]);
         // create a blob from pathnames[p]
         // FILE* pathname = fopen(pathnames[p], "r");   // read pathname
-        fputc('B', new_blob);
+        hash = blobby_hash(hash, BLOBETTE_MAGIC_NUMBER);
+        fputc(BLOBETTE_MAGIC_NUMBER, new_blob);
 
         struct stat buf;
         if (stat(pathnames[p], &buf) != 0) {
@@ -338,6 +340,7 @@ void create_blob(char *blob_pathname, char *pathnames[], int compress_blob) {
             mask &= mode;
             mask >>= 8*(2 - i);
             fputc(mask, new_blob);
+            hash = blobby_hash(hash, mask);
         }
 
         // store pathname length - concatenate to fit field length of 2 bytes
@@ -348,6 +351,7 @@ void create_blob(char *blob_pathname, char *pathnames[], int compress_blob) {
             mask &= pathname_length;
             mask >>= 8*(1 - i);
             fputc(mask, new_blob);
+            hash = blobby_hash(hash, mask);
         }
 
         // store content length - concatenate to fit field length of 6 bytes
@@ -358,12 +362,23 @@ void create_blob(char *blob_pathname, char *pathnames[], int compress_blob) {
             mask &= content_length;
             mask >>= 8*(5 - i);
             fputc(mask, new_blob);
+            hash = blobby_hash(hash, mask);
         }
 
-        // store pathname - concatenate to fit field length of pathname_length bytes
+        // store pathname
         for (int i = 0; i < pathname_length; i++) {
             fputc(pathnames[p][i], new_blob);
+            hash = blobby_hash(hash, pathnames[p][i]);
         }
+
+        FILE* f = fopen(pathnames[p], "r");
+        int ch = 0;
+        while((ch = fgetc(f)) != EOF) {
+            fputc(ch, new_blob);
+            hash = blobby_hash(hash, ch);
+        }
+        // store blobette hash
+        fputc(hash, new_blob);
     }
 }
 
