@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <dirent.h>
 
 // the first byte of every blobette has this value
 #define BLOBETTE_MAGIC_NUMBER          0x42
@@ -43,11 +44,27 @@ void usage(char *myname);
 action_t process_arguments(int argc, char *argv[], char **blob_pathname,
                            char ***pathnames, int *compress_blob);
 
-void list_blob(char *blob_pathname, int *hash);
-void extract_blob(char *blob_pathname, int *hash);
+void list_blob(char *blob_pathname);
+void extract_blob(char *blob_pathname);
+// void extract_directory(char *directory);
 void create_blob(char *blob_pathname, char *pathnames[], int compress_blob);
 
 uint8_t blobby_hash(uint8_t hash, uint8_t byte);
+
+/* Helper functions for create blob.
+    Inputs:
+        - Char array pointer for pathnames to be added to blob
+        - pathname for either folder/file to be added to blob
+
+    Returns void. Updates pathnames array to EITHER:
+        - include all files in the specified blob directory
+        - OR include all levels of directories above a given file
+*/
+
+// add this back to add_folder:  
+void add_folder_to_blob(char *new_blob, char *directory);
+void add_file_to_blob(char *blob, char *file_pathname);
+void unpack_pathnames(char *new_blob, char *file_pathname);
 
 
 // ADD YOUR FUNCTION PROTOTYPES HERE
@@ -60,20 +77,16 @@ int main(int argc, char *argv[]) {
     char **pathnames = NULL;
     int compress_blob = 0;
 
-    int i = 0;
-    int *hash;
-    hash = &i;
-
     action_t action = process_arguments(argc, argv, &blob_pathname, &pathnames,
                                         &compress_blob);
 
     switch (action) {
     case a_list:
-        list_blob(blob_pathname, hash);
+        list_blob(blob_pathname);
         break;
 
     case a_extract:
-        extract_blob(blob_pathname, hash);
+        extract_blob(blob_pathname);
         break;
 
     case a_create:
@@ -157,7 +170,7 @@ action_t process_arguments(int argc, char *argv[], char **blob_pathname,
 
 // list the contents of blob_pathname
 
-void list_blob(char *blob_pathname, int *hash) {
+void list_blob(char *blob_pathname) {
     // prints out:
     //      - file/directory permissions in octal
     //      - file/directory size in bytes
@@ -169,8 +182,9 @@ void list_blob(char *blob_pathname, int *hash) {
     }
 
     int ch = 0;
+    int hash = 0;
     while ((ch = fgetc(f))!= EOF) {
-        *hash = blobby_hash(00, ch);
+        hash = blobby_hash(00, ch);
         if (ch != BLOBETTE_MAGIC_NUMBER) {
             fprintf(stderr, "ERROR: Magic byte of blobette incorrect\n");
             break;
@@ -182,7 +196,7 @@ void list_blob(char *blob_pathname, int *hash) {
             mode <<= 8;
             ch = fgetc(f);
             mode |= ch;
-            *hash = blobby_hash(*hash, ch);
+            hash = blobby_hash(hash, ch);
         }
 
         // read p length
@@ -191,7 +205,7 @@ void list_blob(char *blob_pathname, int *hash) {
             p_length <<= 8;
             ch = fgetc(f);
             p_length |= ch;
-            *hash = blobby_hash(*hash, ch);
+            hash = blobby_hash(hash, ch);
         }
 
         // read c length
@@ -200,20 +214,20 @@ void list_blob(char *blob_pathname, int *hash) {
             c_length <<= 8;
             ch = fgetc(f);
             c_length |= ch;
-            *hash = blobby_hash(*hash, ch);
+            hash = blobby_hash(hash, ch);
         }
 
         char pathname[p_length + 1];
         for (int i = 0; i < p_length; i++){
             ch = fgetc(f);
             pathname[i] = ch;
-            *hash = blobby_hash(*hash, ch);
+            hash = blobby_hash(hash, ch);
         }
         pathname[p_length] = '\0';
 
         for (int i = 0; i < c_length; i++){
             ch = fgetc(f);
-            *hash = blobby_hash(*hash, ch);
+            hash = blobby_hash(hash, ch);
         }
 
         // read hash
@@ -230,7 +244,7 @@ void list_blob(char *blob_pathname, int *hash) {
 
 // extract the contents of blob_pathname
 
-void extract_blob(char *blob_pathname, int *hash) {
+void extract_blob(char *blob_pathname) {
     FILE* f = fopen(blob_pathname, "r"); // read a file with the given name
     if (f == NULL) {
         perror("Something went wrong");
@@ -238,11 +252,12 @@ void extract_blob(char *blob_pathname, int *hash) {
 
     int hash_correct = 1;
     int ch = 0;
+    int hash = 0;
     while ((ch = fgetc(f))!= EOF) {
-        *hash = blobby_hash(00, ch);
+        hash = blobby_hash(00, ch);
         if (ch != BLOBETTE_MAGIC_NUMBER) {
             fprintf(stderr, "ERROR: Magic byte of blobette incorrect\n");
-            break;
+            exit(1);
         }
 
         // read mode
@@ -251,7 +266,7 @@ void extract_blob(char *blob_pathname, int *hash) {
             mode <<= 8;
             ch = fgetc(f);
             mode |= ch;
-            *hash = blobby_hash(*hash, ch);
+            hash = blobby_hash(hash, ch);
         }
 
         // read p length
@@ -260,7 +275,7 @@ void extract_blob(char *blob_pathname, int *hash) {
             p_length <<= 8;
             ch = fgetc(f);
             p_length |= ch;
-            *hash = blobby_hash(*hash, ch);
+            hash = blobby_hash(hash, ch);
         }
 
         // read c length
@@ -269,41 +284,68 @@ void extract_blob(char *blob_pathname, int *hash) {
             c_length <<= 8;
             ch = fgetc(f);
             c_length |= ch;
-            *hash = blobby_hash(*hash, ch);
+            hash = blobby_hash(hash, ch);
         }
 
         char pathname[p_length + 1];
         for (int i = 0; i < p_length; i++){
             ch = fgetc(f);
             pathname[i] = ch;
-            *hash = blobby_hash(*hash, ch);
+            hash = blobby_hash(hash, ch);
         }
         pathname[p_length] = '\0';
 
-        printf("Extracting: %s\n", pathname);
+        if (c_length == 0) {
+            printf("Creating directory: %s\n", pathname);
+            // extract_directory(pathname);
+            if (mkdir(pathname, 0755) != 0) {
+                perror(pathname);
+                exit(1);
+            }
+            if (chmod(pathname, mode) != 0) {
+                perror("unable to update mode of directory");
+            }
 
-        FILE* new_f = fopen(pathname, "w");
-
-        // set mode of new file with chmod()
-        if (chmod(pathname, mode) != 0) {
-            perror("unable to update mode of file");
-        }
-        
-        // write contents of new file
-        for (int i = 0; i < c_length; i++){
+            // read hash
             ch = fgetc(f);
-            fputc(ch, new_f);
-            *hash = blobby_hash(*hash, ch);
-        }
 
-        // read hash
-        ch = fgetc(f);
-        if (*hash != ch) {
-            hash_correct = -1;
+            if (hash != ch) {
+                hash_correct = -1;
+            }
+
+            if (hash_correct != 1) {
+                fprintf(stderr, "ERROR: blob hash incorrect\n");
+            }
+        } 
+        
+        else {
+            printf("Extracting: %s\n", pathname);
+
+            FILE* new_f = fopen(pathname, "w");
+
+            // set mode of new file with chmod()
+            if (chmod(pathname, mode) != 0) {
+                perror("unable to update mode of file");
+            }
+
+            // write contents of new file
+            for (int i = 0; i < c_length; i++){
+                ch = fgetc(f);
+                fputc(ch, new_f);
+                hash = blobby_hash(hash, ch);
+            }
+
+            // read hash
+            ch = fgetc(f);
+
+            if (hash != ch) {
+                hash_correct = -1;
+            }
+
+            if (hash_correct != 1) {
+                fprintf(stderr, "ERROR: blob hash incorrect\n");
+            }
         }
-    }
-    if (hash_correct != 1) {
-        fprintf(stderr, "ERROR: blob hash incorrect\n");
     }
 }
 
@@ -316,74 +358,154 @@ void create_blob(char *blob_pathname, char *pathnames[], int compress_blob) {
     //        compress_blob ? "compressed" : "non-compressed", blob_pathname);
 
     FILE* new_blob = fopen(blob_pathname, "w"); // create blob
+    fclose(new_blob);
+
     for (int p = 0; pathnames[p]; p++) {
-        int hash = 0;
+        // examine each pathname
+        // if a FILE is specified:
+        //      --> add all the preceding directories
+        //      --> examples/2_files/hello.txt     --> [examples, examples/2_files, examples/2_files/hello.txt]
+        // if a DIRECTORY is specified:
+        //      --> recursively add all the contents of that directory
+        //      --> then treat as FILE and add all the preceding dictionaries
 
-        printf("Adding: %s\n", pathnames[p]);
-        // create a blob from pathnames[p]
-        // FILE* pathname = fopen(pathnames[p], "r");   // read pathname
-        hash = blobby_hash(hash, BLOBETTE_MAGIC_NUMBER);
-        fputc(BLOBETTE_MAGIC_NUMBER, new_blob);
-
-        struct stat buf;
-        if (stat(pathnames[p], &buf) != 0) {
-            fprintf(stderr, "Failed to load stat from file");
-            exit(EXIT_FAILURE);
+        // unpack the given pathname and add these paths to the blob
+        struct stat file_info;
+        stat(pathnames[p], &file_info);
+        if (S_ISDIR(file_info.st_mode)) {
+            unpack_pathnames(blob_pathname, pathnames[p]);
+            add_folder_to_blob(blob_pathname, pathnames[p]);
+        } else {
+            // printf("I'm a file!\n");
+            unpack_pathnames(blob_pathname, pathnames[p]);
         }
 
-        // extract mode from pathname[p] and use bit-shift to store in blob
-        // concatenate to fit field length of 3 bytes
-        mode_t mode = buf.st_mode;
-        for (int i = 0; i < 3; i++) {
-            uint32_t mask = 0xFF;
-            mask <<= 8*(2 - i);
-            mask &= mode;
-            mask >>= 8*(2 - i);
-            fputc(mask, new_blob);
-            hash = blobby_hash(hash, mask);
-        }
+        
+    }
+}
 
-        // store pathname length - concatenate to fit field length of 2 bytes
-        uint pathname_length = strlen(pathnames[p]);
-        for (int i = 0; i < 2; i++) {
-            uint32_t mask = 0xFF;
-            mask <<= 8*(1 - i);
-            mask &= pathname_length;
-            mask >>= 8*(1 - i);
-            fputc(mask, new_blob);
-            hash = blobby_hash(hash, mask);
-        }
 
-        // store content length - concatenate to fit field length of 6 bytes
-        off_t content_length = buf.st_size;
-        for (int i = 0; i < 6; i++) {
-            uint64_t mask = 0xFF;
-            mask <<= 8*(5 - i);
-            mask &= content_length;
-            mask >>= 8*(5 - i);
-            fputc(mask, new_blob);
-            hash = blobby_hash(hash, mask);
-        }
+// include all files in the specified blob directory
+void add_folder_to_blob(char *new_blob, char *directory) {
+    char path[1000];
+    struct dirent *dp;
+    DIR *dir = opendir(directory);
 
-        // store pathname
-        for (int i = 0; i < pathname_length; i++) {
-            fputc(pathnames[p][i], new_blob);
-            hash = blobby_hash(hash, pathnames[p][i]);
-        }
+   
+    if (!dir)
+        return;
 
-        FILE* f = fopen(pathnames[p], "r");
+    while ((dp = readdir(dir)) != NULL)
+    {
+        if (strcmp(dp->d_name, ".") != 0 && strcmp(dp->d_name, "..") != 0)
+        {
+            strcpy(path, directory);
+            strcat(path, "/");
+            strcat(path, dp->d_name);
+            add_file_to_blob(new_blob, path);
+
+            add_folder_to_blob(new_blob, path);
+        }
+    }
+
+    closedir(dir);
+}
+
+// include all levels of directories above a given file
+void add_file_to_blob(char *blob, char *file_pathname) {
+
+    // open the input blob and write to the END of blob
+    FILE* new_blob = fopen(blob, "a");
+
+    int hash = 0;
+
+    printf("Adding: %s\n", file_pathname);
+    hash = blobby_hash(hash, BLOBETTE_MAGIC_NUMBER);
+    fputc(BLOBETTE_MAGIC_NUMBER, new_blob);
+
+    struct stat buf;
+    if (stat(file_pathname, &buf) != 0) {
+        fprintf(stderr, "Failed to load stat from file\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // extract mode from pathname[p] and use bit-shift to store in blob
+    // concatenate to fit field length of 3 bytes
+    mode_t mode = buf.st_mode;
+    for (int i = 0; i < 3; i++) {
+        uint32_t mask = 0xFF;
+        mask <<= 8*(2 - i);
+        mask &= mode;
+        mask >>= 8*(2 - i);
+        fputc(mask, new_blob);
+        hash = blobby_hash(hash, mask);
+    }
+
+    // store pathname length - concatenate to fit field length of 2 bytes
+    int pathname_length = strlen(file_pathname);
+    for (int i = 0; i < 2; i++) {
+        uint32_t mask = 0xFF;
+        mask <<= 8*(1 - i);
+        mask &= pathname_length;
+        mask >>= 8*(1 - i);
+        fputc(mask, new_blob);
+        hash = blobby_hash(hash, mask);
+    }
+
+    // store content length - concatenate to fit field length of 6 bytes
+    off_t content_length = buf.st_size;
+    // printf("content_length is %ld\n", content_length);
+    if (S_ISDIR(mode)) {
+        content_length = 0;
+    }
+
+    for (int i = 0; i < 6; i++) {
+        uint64_t mask = 0xFF;
+        mask <<= 8*(5 - i);
+        mask &= content_length;
+        mask >>= 8*(5 - i);
+        fputc(mask, new_blob);
+        hash = blobby_hash(hash, mask);
+    }
+
+    // store pathname
+    for (int i = 0; i < pathname_length; i++) {
+        fputc(file_pathname[i], new_blob);
+        hash = blobby_hash(hash, file_pathname[i]);
+    }
+
+    if (!(S_ISDIR(mode))) {
+        FILE* f = fopen(file_pathname, "r");
         int ch = 0;
         while((ch = fgetc(f)) != EOF) {
             fputc(ch, new_blob);
             hash = blobby_hash(hash, ch);
         }
-        // store blobette hash
-        fputc(hash, new_blob);
     }
+    // store blobette hash
+    fputc(hash, new_blob);
+    fclose(new_blob);
 }
 
 
-// ADD YOUR FUNCTIONS HERE
+// helper function to unpack previous directories of a given file
+// e.g.     unpack_pathnames(examples/2_files.d/hello.txt) --> [examples, examples/2_files.d, examples/2_files.d/hello.txt]
+void unpack_pathnames(char *new_blob, char *file_pathname) {    
+    char ch;
+    int i = 0;
+    char temp_array[FILENAME_MAX];
+    while ((ch = file_pathname[i]) != '\0') {
+        // printf("at letter %c now\n", ch);
+        if (ch == '/') {
+            temp_array[i] = '\0';
+            add_file_to_blob(new_blob, temp_array);
+        }
+        temp_array[i] = ch;
+        i++;
+    }
+    temp_array[i] = '\0';
+    add_file_to_blob(new_blob, temp_array);
+}
 
 
 // YOU SHOULD NOT CHANGE CODE BELOW HERE
