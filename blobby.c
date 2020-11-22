@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <spawn.h>
 #include <assert.h>
 #include <unistd.h>
 #include <sys/types.h>
@@ -28,10 +29,6 @@
 #define BLOBETTE_MAX_PATHNAME_LENGTH   65535
 #define BLOBETTE_MAX_CONTENT_LENGTH    281474976710655
 
-
-// ADD YOUR #defines HERE
-
-
 typedef enum action {
     a_invalid,
     a_list,
@@ -46,31 +43,13 @@ action_t process_arguments(int argc, char *argv[], char **blob_pathname,
 
 void list_blob(char *blob_pathname);
 void extract_blob(char *blob_pathname);
-// void extract_directory(char *directory);
 void create_blob(char *blob_pathname, char *pathnames[], int compress_blob);
-
 uint8_t blobby_hash(uint8_t hash, uint8_t byte);
 
-/* Helper functions for create blob.
-    Inputs:
-        - Char array pointer for pathnames to be added to blob
-        - pathname for either folder/file to be added to blob
-
-    Returns void. Updates pathnames array to EITHER:
-        - include all files in the specified blob directory
-        - OR include all levels of directories above a given file
-*/
-
-// add this back to add_folder:  
+// Additional prototypes
 void add_folder_to_blob(char *new_blob, char *directory);
 void add_file_to_blob(char *blob, char *file_pathname);
 void unpack_pathnames(char *new_blob, char *file_pathname);
-
-
-// ADD YOUR FUNCTION PROTOTYPES HERE
-
-
-// YOU SHOULD NOT NEED TO CHANGE main, usage or process_arguments
 
 int main(int argc, char *argv[]) {
     char *blob_pathname = NULL;
@@ -192,7 +171,7 @@ void list_blob(char *blob_pathname) {
 
         // read mode
         unsigned long mode = 0;
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < BLOBETTE_MODE_LENGTH_BYTES; i++) {
             mode <<= 8;
             ch = fgetc(f);
             mode |= ch;
@@ -201,7 +180,7 @@ void list_blob(char *blob_pathname) {
 
         // read p length
         unsigned long p_length = 0;
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < BLOBETTE_PATHNAME_LENGTH_BYTES; i++) {
             p_length <<= 8;
             ch = fgetc(f);
             p_length |= ch;
@@ -210,7 +189,7 @@ void list_blob(char *blob_pathname) {
 
         // read c length
         unsigned long c_length = 0;
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < BLOBETTE_CONTENT_LENGTH_BYTES; i++) {
             c_length <<= 8;
             ch = fgetc(f);
             c_length |= ch;
@@ -236,15 +215,20 @@ void list_blob(char *blob_pathname) {
         // start over
         printf("%06lo %5lu %s\n", mode, c_length, pathname);
     }
-
-    // file type and permissions returned in st_mode field from lstat(2)
-
 }
 
 
 // extract the contents of blob_pathname
 
 void extract_blob(char *blob_pathname) {
+    FILE* comp_f = fopen(blob_pathname, "r");
+    uint64_t detector = 0;
+    for (int i = 0; i < 6; i++) {
+        detector |= fgetc(comp_f);
+    } if (detector == 0xFD377A585A00) {
+        printf("compressed file\n");
+    } fclose(comp_f);
+
     FILE* f = fopen(blob_pathname, "r"); // read a file with the given name
     if (f == NULL) {
         perror("Something went wrong");
@@ -262,7 +246,7 @@ void extract_blob(char *blob_pathname) {
 
         // read mode
         unsigned long mode = 0;
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < BLOBETTE_MODE_LENGTH_BYTES; i++) {
             mode <<= 8;
             ch = fgetc(f);
             mode |= ch;
@@ -271,7 +255,7 @@ void extract_blob(char *blob_pathname) {
 
         // read p length
         unsigned long p_length = 0;
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < BLOBETTE_PATHNAME_LENGTH_BYTES; i++) {
             p_length <<= 8;
             ch = fgetc(f);
             p_length |= ch;
@@ -280,7 +264,7 @@ void extract_blob(char *blob_pathname) {
 
         // read c length
         unsigned long c_length = 0;
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < BLOBETTE_CONTENT_LENGTH_BYTES; i++) {
             c_length <<= 8;
             ch = fgetc(f);
             c_length |= ch;
@@ -295,7 +279,7 @@ void extract_blob(char *blob_pathname) {
         }
         pathname[p_length] = '\0';
 
-        if (c_length == 0) {
+        if (c_length == 0) {    // dealing with a directory
             printf("Creating directory: %s\n", pathname);
             // extract_directory(pathname);
             if (mkdir(pathname, 0755) != 0) {
@@ -318,7 +302,7 @@ void extract_blob(char *blob_pathname) {
             }
         } 
         
-        else {
+        else {                  // dealing with a file
             printf("Extracting: %s\n", pathname);
 
             FILE* new_f = fopen(pathname, "w");
@@ -352,62 +336,82 @@ void extract_blob(char *blob_pathname) {
 // create blob_pathname from NULL-terminated array pathnames
 // compress with xz if compress_blob non-zero (subset 4)
 
+/*
+    examine each pathname
+    if a FILE is specified:
+            --> add all the preceding directories
+            --> examples/2_files/hello.txt     --> [examples, examples/2_files, examples/2_files/hello.txt]
+    if a DIRECTORY is specified:
+            --> recursively add all the contents of that directory
+            --> then treat as FILE and add all the preceding dictionaries
+
+    unpack the given pathname and add these paths to the blob
+*/
 void create_blob(char *blob_pathname, char *pathnames[], int compress_blob) {
 
-    // printf("create_blob called to create %s blob '%s' containing:\n",
-    //        compress_blob ? "compressed" : "non-compressed", blob_pathname);
+    // if (compress_blob != 0) {
+    //     // Create a list of file actions to be carried out on spawned process.
+    //     posix_spawn_file_actions_t actions;
+    //     if (posix_spawn_file_actions_init(&actions) != 0) {
+    //         perror("posix_spawn_file_actions_init");
+    //         return;
+    //     }
+
+    //     // Spawn a process running xz to compress this file. 
+    //     char *sort_argv[] = {"xz", "-z", blob_pathname};
+    //     pid_t pid;
+    //     extern char **environ;
+    //     if (posix_spawn(&pid, "/usr/bin/xz", &actions, NULL, sort_argv, environ) != 0) {
+    //         perror("spawn");
+    //         return;
+    //     }
+
+    //     wait(pid);
+
+    //     return;
+    // }
 
     FILE* new_blob = fopen(blob_pathname, "w"); // create blob
     fclose(new_blob);
 
     for (int p = 0; pathnames[p]; p++) {
-        // examine each pathname
-        // if a FILE is specified:
-        //      --> add all the preceding directories
-        //      --> examples/2_files/hello.txt     --> [examples, examples/2_files, examples/2_files/hello.txt]
-        // if a DIRECTORY is specified:
-        //      --> recursively add all the contents of that directory
-        //      --> then treat as FILE and add all the preceding dictionaries
 
-        // unpack the given pathname and add these paths to the blob
         struct stat file_info;
         stat(pathnames[p], &file_info);
         if (S_ISDIR(file_info.st_mode)) {
             unpack_pathnames(blob_pathname, pathnames[p]);
             add_folder_to_blob(blob_pathname, pathnames[p]);
         } else {
-            // printf("I'm a file!\n");
             unpack_pathnames(blob_pathname, pathnames[p]);
         }
 
-        
     }
 }
 
 
-// include all files in the specified blob directory
+// add all files to the specified blob directory
+// ADAPTED FROM: https://codeforwin.org/2018/03/c-program-to-list-all-files-in-a-directory-recursively.html 
 void add_folder_to_blob(char *new_blob, char *directory) {
-    char path[1000];
+    char path[BLOBETTE_MAX_PATHNAME_LENGTH];
     struct dirent *dp;
-    DIR *dir = opendir(directory);
-
-   
+    DIR *dir = opendir(directory);   
     if (!dir)
         return;
 
     while ((dp = readdir(dir)) != NULL)
     {
-        if (strcmp(dp->d_name, ".") != 0 && strcmp(dp->d_name, "..") != 0)
+        if ( strcmp(dp->d_name, "..") != 0 && strcmp(dp->d_name, ".") != 0)
         {
             strcpy(path, directory);
             strcat(path, "/");
             strcat(path, dp->d_name);
-            add_file_to_blob(new_blob, path);
 
+            // include levels of directory above path
+            add_file_to_blob(new_blob, path);
+            // recursively call add_folder
             add_folder_to_blob(new_blob, path);
         }
     }
-
     closedir(dir);
 }
 
@@ -432,7 +436,7 @@ void add_file_to_blob(char *blob, char *file_pathname) {
     // extract mode from pathname[p] and use bit-shift to store in blob
     // concatenate to fit field length of 3 bytes
     mode_t mode = buf.st_mode;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < BLOBETTE_MODE_LENGTH_BYTES; i++) {
         uint32_t mask = 0xFF;
         mask <<= 8*(2 - i);
         mask &= mode;
@@ -443,7 +447,7 @@ void add_file_to_blob(char *blob, char *file_pathname) {
 
     // store pathname length - concatenate to fit field length of 2 bytes
     int pathname_length = strlen(file_pathname);
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < BLOBETTE_PATHNAME_LENGTH_BYTES; i++) {
         uint32_t mask = 0xFF;
         mask <<= 8*(1 - i);
         mask &= pathname_length;
@@ -454,12 +458,12 @@ void add_file_to_blob(char *blob, char *file_pathname) {
 
     // store content length - concatenate to fit field length of 6 bytes
     off_t content_length = buf.st_size;
-    // printf("content_length is %ld\n", content_length);
+
     if (S_ISDIR(mode)) {
         content_length = 0;
     }
 
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < BLOBETTE_CONTENT_LENGTH_BYTES; i++) {
         uint64_t mask = 0xFF;
         mask <<= 8*(5 - i);
         mask &= content_length;
@@ -506,9 +510,6 @@ void unpack_pathnames(char *new_blob, char *file_pathname) {
     temp_array[i] = '\0';
     add_file_to_blob(new_blob, temp_array);
 }
-
-
-// YOU SHOULD NOT CHANGE CODE BELOW HERE
 
 // Lookup table for a simple Pearson hash
 // https://en.wikipedia.org/wiki/Pearson_hashing
